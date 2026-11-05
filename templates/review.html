@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Check rows{% endblock %}
+{% block content %}
+<h1>Check the rows · {{ report_date|longdate }}</h1>
+<p class="muted">Compare each row with the photo. Fix anything that is wrong, add missing rows, then save. Nothing is written to Tracker.xlsx until you press <b>Save</b>.</p>
+
+{% if notes %}
+<div class="card notes">
+  <h3>Notes from the photo reader</h3>
+  <ul>{% for n in notes %}<li>{{ n }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<div class="review-grid {{ 'no-photo' if not token }}">
+  {% if token %}
+  <figure class="card photo">
+    <a href="{{ url_for('upload_image', token=token) }}" target="_blank" rel="noopener">
+      <img src="{{ url_for('upload_image', token=token) }}" alt="Whiteboard photo">
+    </a>
+    <figcaption class="muted small">Tap the photo to open it full size.</figcaption>
+  </figure>
+  {% endif %}
+
+  <form class="card" method="post" action="{{ url_for('save') }}" id="rows-form">
+    <input type="hidden" name="report_date" value="{{ report_date.isoformat() }}">
+    <input type="hidden" name="token" value="{{ token or '' }}">
+    <datalist id="client-list">{% for c in clients %}<option value="{{ c.name }}">{% endfor %}</datalist>
+
+    <table class="rows">
+      <thead><tr><th>Rider</th><th>Client</th><th class="num">Qty</th><th></th></tr></thead>
+      <tbody id="rows">
+      {% for r in rows %}
+        <tr class="{{ 'flagged' if r.flags }}">
+          <td><select name="rider">
+            {% if r.rider not in riders %}<option value="{{ r.rider }}" selected>{{ r.rider }} ?</option>{% endif %}
+            {% for rd in riders %}<option {{ 'selected' if rd == r.rider }}>{{ rd }}</option>{% endfor %}
+          </select></td>
+          <td><input name="client" value="{{ r.client }}" list="client-list" autocomplete="off">
+            {% if r.flags %}<div class="flags">⚠ {{ r.flags|join('; ') }}</div>{% endif %}</td>
+          <td class="num"><input name="qty" value="{{ r.qty|qty }}" inputmode="decimal"></td>
+          <td><button type="button" class="icon remove" title="Remove row">✕</button></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr><td colspan="2" class="right"><b>Total</b></td><td class="num"><b id="total">0</b></td><td></td></tr>
+      </tfoot>
+    </table>
+    <template id="row-tpl">
+      <tr>
+        <td><select name="rider">{% for rd in riders %}<option>{{ rd }}</option>{% endfor %}</select></td>
+        <td><input name="client" list="client-list" autocomplete="off"></td>
+        <td class="num"><input name="qty" inputmode="decimal"></td>
+        <td><button type="button" class="icon remove" title="Remove row">✕</button></td>
+      </tr>
+    </template>
+    <div class="subtotals" id="subtotals"></div>
+    <div class="actions">
+      <button type="button" class="secondary" id="add-row">+ Add row</button>
+      <button type="submit" class="primary">Save to Tracker.xlsx</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  const tbody = document.getElementById('rows');
+  const tpl = document.getElementById('row-tpl');
+  function addRow(focus) {
+    const row = tpl.content.firstElementChild.cloneNode(true);
+    const last = tbody.querySelector('tr:last-child select');
+    if (last) row.querySelector('select').value = last.value;   // same rider as the row above
+    tbody.appendChild(row);
+    if (focus) row.querySelector('[name=client]').focus();
+    recalc();
+  }
+  function num(v) { v = (v || '').trim(); return v === '1/2' ? 0.5 : parseFloat(v) || 0; }
+  function fmt(n) { return Number.isInteger(n) ? String(n) : n.toFixed(1); }
+  function recalc() {
+    let total = 0; const per = {};
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const q = num(tr.querySelector('[name=qty]').value);
+      const r = tr.querySelector('[name=rider]').value;
+      total += q; per[r] = (per[r] || 0) + q;
+    });
+    document.getElementById('total').textContent = fmt(total);
+    document.getElementById('subtotals').innerHTML = Object.entries(per).filter(([, q]) => q > 0)
+      .map(([r, q]) => `<span class="chip">${r}: <b>${fmt(q)}</b></span>`).join('');
+  }
+  document.getElementById('add-row').addEventListener('click', () => addRow(true));
+  tbody.addEventListener('click', e => { if (e.target.classList.contains('remove')) { e.target.closest('tr').remove(); recalc(); } });
+  tbody.addEventListener('input', recalc);
+  tbody.addEventListener('change', recalc);
+  if (!tbody.children.length) { for (let i = 0; i < 5; i++) addRow(false); }
+  recalc();
+</script>
+{% endblock %}
