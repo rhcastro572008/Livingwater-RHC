@@ -61,6 +61,7 @@ def client(tmp_path, tracker_path):
         "RIDERS": RIDERS,
         "READER": fake_reader,
         "APP_PASSWORD": "",
+        "CSRF_ENABLED": False,
     })
     return app.test_client()
 
@@ -206,8 +207,101 @@ def test_clients_and_password(client, tracker_path, tmp_path):
     client.post("/clients", data={"name": "newbie", "status": "ACTIVE"})
     assert "NEWBIE" in [c.name for c in tracker.load_clients(tracker_path)]
     app = create_app({"TRACKER_PATH": tracker_path, "REPORTS_DIR": tmp_path / "r", "RAW_DIR": tmp_path / "w",
-                      "UPLOADS_DIR": tmp_path / "u", "BACKUPS_DIR": tmp_path / "k", "APP_PASSWORD": "pw"})
+                      "UPLOADS_DIR": tmp_path / "u", "BACKUPS_DIR": tmp_path / "k", "APP_PASSWORD": "pw",
+                      "CSRF_ENABLED": False})
     c = app.test_client()
     assert c.get("/").status_code == 401
     import base64
     assert c.get("/", headers={"Authorization": "Basic " + base64.b64encode(b"x:pw").decode()}).status_code == 200
+
+
+# ------------------------------------------------------------------ regressions
+
+def test_blank_rows_with_rider_selected_are_ignored(client, tracker_path):
+    # the review form always sends a rider for empty lines (it's a dropdown)
+    r = client.post("/save", data={
+        "report_date": "2026-11-05",
+        "rider": ["Ram", "Mike", "Amped", "Amped"], "client": ["LISA", "ROSE", "", ""], "qty": ["2", "1", "", ""],
+    })
+    assert r.status_code == 302
+    assert len([s for s in tracker.load_sales(tracker_path) if s.date == date(2026, 11, 5)]) == 2
+
+
+@pytest.mark.parametrize("bad", ["nan", "inf", "-1", "0", "abc", "1/0"])
+def test_invalid_quantities_rejected(client, tracker_path, bad):
+    r = client.post("/save", data={"report_date": "2026-11-06", "rider": ["Ram"], "client": ["LISA"], "qty": [bad]})
+    assert r.status_code == 400
+    assert f'value="{bad}"' in r.get_data(as_text=True) or bad in ("-1", "0")  # typed value is kept
+    assert date(2026, 11, 6) not in tracker.loaded_dates(tracker_path)
+
+
+def test_quantity_formats_and_duplicates_merged(client, tracker_path):
+    r = client.post("/save", data={
+        "report_date": "2026-11-07",
+        "rider": ["Ram", "Ram", "Mike"], "client": ["LISA", "lisa", "ROSE"], "qty": ["1 1/2", "1,000", "0.25"],
+    })
+    assert r.status_code == 302
+    sales = [s for s in tracker.load_sales(tracker_path) if s.date == date(2026, 11, 7)]
+    assert [(s.rider, s.client, s.count) for s in sales] == [("Ram", "LISA", 1001.5), ("Mike", "ROSE", 0.25)]
+
+
+def test_review_inputs_keep_exact_quantity(client):
+    def reader(*a):
+        return BoardReading(entries=[BoardEntry(rider="Ram", client="LISA", quantity=0.25, unclear=False, note=""),
+                                     BoardEntry(rider="Mike", client="ROSE", quantity=1500, unclear=False, note="")],
+                            riders_off=[], left_out=[], notes=[])
+    client.application.config["READER"] = reader
+    r = client.post("/upload", data={"report_date": "2026-11-08", "photo": (jpeg(), "b.jpg")},
+                    content_type="multipart/form-data")
+    html = r.get_data(as_text=True)
+    assert 'value="0.25"' in html and 'value="1500"' in html
+
+
+def test_excel_serial_dates_are_read(tracker_path):
+    wb = load_workbook(tracker_path)
+    wb["Data Source"].append(["Ram", 46330, "LISA", 1])  # 46330 = 11/4/2026 stored as a plain number
+    wb.save(tracker_path)
+    assert date(2026, 11, 4) in tracker.loaded_dates(tracker_path)
+
+
+def test_report_merges_client_case():
+    d = date(2026, 11, 3)
+    rep = build_report(d, [Sale("Ram", d, "LISA", 1), Sale("Ram", d, "Lisa", 1)], ["Ram"])
+    assert rep.blocks[0].lines == [("LISA", 2)]
+
+
+def test_backups_are_pruned(tracker_path, tmp_path):
+    for _ in range(5):
+        tracker.backup(tracker_path, tmp_path / "b", keep=3)
+    assert len(list((tmp_path / "b").iterdir())) == 3
+
+
+def test_csrf_token_required(tmp_path, tracker_path):
+    app = create_app({"TRACKER_PATH": tracker_path, "REPORTS_DIR": tmp_path / "r", "RAW_DIR": tmp_path / "w",
+                      "UPLOADS_DIR": tmp_path / "u", "BACKUPS_DIR": tmp_path / "k", "APP_PASSWORD": ""})
+    c = app.test_client()
+    # a forged post (no token) is refused and changes nothing
+    c.post("/reports/2026-11-01/delete")
+    assert date(2026, 11, 1) in tracker.loaded_dates(tracker_path)
+    html = c.get("/reports/2026-11-01").get_data(as_text=True)
+    token = html.split('name="csrf_token" value="')[1].split('"')[0]
+    c.post("/reports/2026-11-01/delete", data={"csrf_token": token})
+    assert date(2026, 11, 1) not in tracker.loaded_dates(tracker_path)
+
+
+def test_non_ascii_password_does_not_crash(tmp_path, tracker_path):
+    import base64
+    app = create_app({"TRACKER_PATH": tracker_path, "REPORTS_DIR": tmp_path / "r", "RAW_DIR": tmp_path / "w",
+                      "UPLOADS_DIR": tmp_path / "u", "BACKUPS_DIR": tmp_path / "k", "APP_PASSWORD": "señor"})
+    c = app.test_client()
+    bad = base64.b64encode("x:mañana".encode()).decode()
+    good = base64.b64encode("x:señor".encode()).decode()
+    assert c.get("/", headers={"Authorization": "Basic " + bad}).status_code == 401
+    assert c.get("/", headers={"Authorization": "Basic " + good}).status_code == 200
+
+
+def test_today_uses_business_timezone(client):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    html = client.get("/").get_data(as_text=True)
+    assert f'max="{datetime.now(ZoneInfo("Asia/Manila")).date().isoformat()}"' in html

@@ -35,6 +35,7 @@
 
 <form method="post" action="{{ url_for('report_delete', day=report.report_date.isoformat()) }}" class="danger-zone noprint"
       onsubmit="return confirm('Remove all rows for {{ report.title_date }} from Tracker.xlsx? A backup is kept.')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <p class="muted small">Made a mistake? Remove this day from Tracker.xlsx, then upload the photo again.</p>
   <button class="danger small">Remove this day from the tracker</button>
 </form>

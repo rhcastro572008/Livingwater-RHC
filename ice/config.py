@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 try:  # optional: load a local .env file if python-dotenv is installed
@@ -41,11 +42,15 @@ INACTIVE_DAYS = int(os.environ.get("INACTIVE_DAYS", "5"))
 # Claude vision model used to read the whiteboard photo.
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-5-5")
 
-SECRET_KEY = os.environ.get("SECRET_KEY", "change-me-in-production")
+# Sessions only carry flash messages, so a random key per start is fine when none is set.
+SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
 # Optional shared password for the whole site (HTTP basic auth, any username).
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "20"))
+
+# "Today" is worked out in the business's time zone, not the server's (cloud servers run on UTC).
+APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "Asia/Manila")
 
 
 def ensure_dirs() -> None:

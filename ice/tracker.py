@@ -9,6 +9,7 @@ sheets in the workbook are preserved. A backup copy is written before every save
 """
 from __future__ import annotations
 
+import math
 import re
 import shutil
 import threading
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill
+from openpyxl.utils.datetime import from_excel
 
 DATA_SHEET = "Data Source"
 CLIENT_SHEET = "Client List"
@@ -68,6 +70,12 @@ def parse_date(value) -> date | None:
         return value.date()
     if isinstance(value, date):
         return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # Excel serial number (a date cell formatted as General/Number)
+        try:
+            return from_excel(value).date() if 20000 < value < 80000 else None
+        except (ValueError, OverflowError):
+            return None
     text = str(value).strip()
     for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%B %d, %Y", "%b %d, %Y", "%m/%d/%y"):
         try:
@@ -77,18 +85,29 @@ def parse_date(value) -> date | None:
     return None
 
 
-def _num(value) -> float | None:
-    if value is None or value == "":
+def parse_qty(value) -> float | None:
+    """Parse a quantity: 2, 2.5, "1/2", "1 1/2". Returns None if it is not a finite number."""
+    if value is None or value == "" or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
-    text = str(value).strip()
-    if text == "1/2":
-        return 0.5
-    try:
-        return float(text)
-    except ValueError:
-        return None
+        num = float(value)
+    else:
+        text = str(value).strip().replace(",", "")
+        m = re.fullmatch(r"(?:(\d+)\s+)?(\d+)\s*/\s*(\d+)", text)
+        if m:
+            whole, top, bottom = m.groups()
+            if int(bottom) == 0:
+                return None
+            num = int(whole or 0) + int(top) / int(bottom)
+        else:
+            try:
+                num = float(text)
+            except ValueError:
+                return None
+    return num if math.isfinite(num) else None
+
+
+_num = parse_qty
 
 
 def _get_sheet(wb, name: str):
@@ -197,20 +216,36 @@ def _last_data_row(ws, max_col: int) -> int:
     return last
 
 
-def backup(path: Path, backups_dir: Path, reason: str = "before load") -> Path | None:
+def backup(path: Path, backups_dir: Path, reason: str = "before load", keep: int = 60) -> Path | None:
     if not path.exists():
         return None
     backups_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d %H%M%S")
     dest = backups_dir / f"Tracker (backup {reason} {stamp}).xlsx"
+    n = 1
+    while dest.exists():  # two saves in the same second
+        n += 1
+        dest = backups_dir / f"Tracker (backup {reason} {stamp}-{n}).xlsx"
     shutil.copy2(path, dest)
+    prune_backups(backups_dir, keep)
     return dest
+
+
+def prune_backups(backups_dir: Path, keep: int) -> None:
+    if keep <= 0:
+        return
+    files = sorted(backups_dir.glob("Tracker (backup *.xlsx"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in files[keep:]:
+        old.unlink(missing_ok=True)
 
 
 def append_sales(path: Path, sales: list[Sale], backups_dir: Path) -> Path | None:
     """Append rows for one or more *new* dates. Refuses dates already present."""
     if not sales:
         raise TrackerError("No rows to save")
+    for s in sales:
+        if parse_qty(s.count) is None or s.count <= 0:
+            raise TrackerError(f"Invalid quantity {s.count!r} for {s.client}")
     with _lock:
         existing = loaded_dates(path)
         for d in sorted({s.date for s in sales}):
@@ -251,6 +286,13 @@ def delete_date(path: Path, report_date: date, backups_dir: Path) -> int:
             ws.delete_rows(idx)
         wb.save(path)
         return len(to_delete)
+
+
+def replace_tracker(path: Path, new_file: Path, backups_dir: Path) -> None:
+    """Swap in an uploaded tracker (already validated), keeping a backup of the old one."""
+    with _lock:
+        backup(path, backups_dir, reason="before replace")
+        shutil.move(str(new_file), str(path))
 
 
 def upsert_client(path: Path, name: str, status: str, backups_dir: Path) -> None:

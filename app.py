@@ -6,12 +6,13 @@ from __future__ import annotations
 
 import secrets
 import shutil
+import time
 from datetime import date, datetime, timedelta
-from functools import wraps
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from flask import (
-    Flask, Response, abort, flash, redirect, render_template, request, send_file, url_for,
+    Flask, Response, abort, flash, redirect, render_template, request, send_file, session, url_for,
 )
 
 from ice import config, dashboard, extract, tracker
@@ -34,6 +35,8 @@ def create_app(overrides: dict | None = None) -> Flask:
         INACTIVE_DAYS=config.INACTIVE_DAYS,
         ANTHROPIC_MODEL=config.ANTHROPIC_MODEL,
         APP_PASSWORD=config.APP_PASSWORD,
+        APP_TIMEZONE=config.APP_TIMEZONE,
+        CSRF_ENABLED=True,
         READER=None,  # tests can inject a fake board reader
     )
     if overrides:
@@ -48,6 +51,10 @@ def create_app(overrides: dict | None = None) -> Flask:
     def riders() -> list[str]:
         return app.config["RIDERS"]
 
+    def today() -> date:
+        """Today's date where the business is, even if the server runs on UTC."""
+        return datetime.now(ZoneInfo(app.config["APP_TIMEZONE"])).date()
+
     # ------------------------------------------------------------- auth (optional)
     @app.before_request
     def require_password():
@@ -55,14 +62,41 @@ def create_app(overrides: dict | None = None) -> Flask:
         if not pw or request.endpoint == "static":
             return None
         auth = request.authorization
-        if auth and secrets.compare_digest(auth.password or "", pw):
+        if auth and secrets.compare_digest((auth.password or "").encode(), pw.encode()):
             return None
         return Response("Password required", 401, {"WWW-Authenticate": 'Basic realm="Ice Monitoring"'})
+
+    def csrf_token() -> str:
+        if "csrf" not in session:
+            session["csrf"] = secrets.token_hex(16)
+        return session["csrf"]
+
+    @app.before_request
+    def check_csrf():
+        """Every form carries a per-session token, so another website can't post forms
+        (e.g. a hidden "delete this day") using the browser's saved password."""
+        if request.method != "POST" or not app.config["CSRF_ENABLED"]:
+            return None
+        sent = request.form.get("csrf_token", "")
+        if not sent or not secrets.compare_digest(sent, session.get("csrf", "")):
+            flash("The page had expired. Please try again.", "error")
+            return redirect(request.referrer or url_for("upload"))
+        return None
 
     @app.template_filter("qty")
     def qty_filter(v) -> str:
         v = float(v or 0)
         return f"{v:,.0f}" if v.is_integer() else f"{v:,.1f}"
+
+    @app.template_filter("qty_input")
+    def qty_input_filter(v) -> str:
+        """Exact value for an editable input: no thousands separator, no rounding."""
+        if v in (None, ""):
+            return ""
+        try:
+            return f"{float(v):.10g}"
+        except (TypeError, ValueError):
+            return str(v)  # keep what the user typed so they can correct it
 
     @app.template_filter("longdate")
     def longdate_filter(d) -> str:
@@ -70,7 +104,7 @@ def create_app(overrides: dict | None = None) -> Flask:
 
     @app.context_processor
     def inject():
-        return {"nav": request.endpoint, "today": date.today()}
+        return {"nav": request.endpoint, "today": today(), "csrf_token": csrf_token}
 
     # ------------------------------------------------------------------ upload
     @app.get("/")
@@ -92,6 +126,7 @@ def create_app(overrides: dict | None = None) -> Flask:
                   "Delete it on the Reports page first if you want to redo it.", "error")
             return redirect(url_for("upload"))
 
+        clean_old_uploads()
         photo = request.files.get("photo")
         manual = request.form.get("manual") == "1"
         token = None
@@ -124,6 +159,16 @@ def create_app(overrides: dict | None = None) -> Flask:
             return redirect(url_for("upload"))
 
         return render_review(report_date, token, draft.rows, draft.notes)
+
+    def clean_old_uploads(max_age_hours: int = 48) -> None:
+        """Delete photos from reviews that were never saved."""
+        cutoff = time.time() - max_age_hours * 3600
+        for f in Path(app.config["UPLOADS_DIR"]).glob("*"):
+            try:
+                if f.is_file() and f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
 
     def render_review(report_date, token, rows, notes, status=200):
         return render_template(
@@ -161,23 +206,27 @@ def create_app(overrides: dict | None = None) -> Flask:
         clients = tracker.load_clients(tp())
 
         rows, errors = [], []
+        merged: dict[tuple[str, str], extract.DraftRow] = {}
         for i, (r, c, q) in enumerate(zip(riders_in, clients_in, qty_in), start=1):
             r, c, q = r.strip(), c.strip(), q.strip()
-            if not (r or c or q):
-                continue  # blank line
+            if not (c or q):
+                continue  # empty line (the rider dropdown always has a value, so ignore it)
             if r not in riders():
                 errors.append(f"Row {i}: choose a rider from the list ({', '.join(riders())}).")
             if not c:
                 errors.append(f"Row {i}: client is missing.")
-            try:
-                qty = 0.5 if q == "1/2" else float(q)
-                if qty <= 0:
-                    raise ValueError
-            except ValueError:
-                errors.append(f"Row {i}: quantity must be a number greater than 0.")
-                qty = 0
+            qty = tracker.parse_qty(q)
+            if qty is None or qty <= 0:
+                errors.append(f"Row {i}: quantity must be a number greater than 0 (e.g. 2, 0.5 or 1/2).")
             name, flags = tracker.match_client(c, clients, app.config["CLIENT_ALIASES"]) if c else ("", [])
-            rows.append(extract.DraftRow(r, name or c, qty, flags))
+            name = name or c
+            if qty is not None and qty > 0 and (r, name) in merged:
+                merged[(r, name)].qty += qty  # same client twice under one rider -> one line
+                continue
+            row = extract.DraftRow(r, name, qty if qty is not None else q, flags)
+            rows.append(row)
+            if qty is not None and qty > 0:
+                merged[(r, name)] = row
 
         if not rows:
             errors.append("Add at least one row.")
@@ -204,7 +253,7 @@ def create_app(overrides: dict | None = None) -> Flask:
         if new_clients:
             flash("Not on the Client List yet: " + ", ".join(new_clients)
                   + ". Add them on the Clients page so they show up in the dashboard.", "warning")
-        flash(f"Saved {len(sales)} rows for {fmt_long(report_date)} to Tracker.xlsx.", "success")
+        flash(f"Saved {len(sales)} row{'s' if len(sales) != 1 else ''} for {fmt_long(report_date)} to Tracker.xlsx.", "success")
         return redirect(url_for("report_view", day=report_date.isoformat()))
 
     # ------------------------------------------------------------------ reports
@@ -266,15 +315,15 @@ def create_app(overrides: dict | None = None) -> Flask:
     @app.get("/dashboard")
     def dashboard_view():
         sales = tracker.load_sales(tp())
-        today = date.today()
+        today_ = today()
         month_param = request.args.get("month")  # YYYY-MM
         try:
             year, month = (int(x) for x in month_param.split("-")) if month_param else (None, None)
             date(year, month, 1)
         except (TypeError, ValueError):
-            latest = max((s.date for s in sales), default=today)
+            latest = max((s.date for s in sales), default=today_)
             year, month = latest.year, latest.month
-        as_of = tracker.parse_date(request.args.get("as_of")) or today
+        as_of = tracker.parse_date(request.args.get("as_of")) or today_
         days_n = app.config["INACTIVE_DAYS"]
 
         perf = dashboard.rider_performance(sales, year, month, riders())
@@ -364,8 +413,7 @@ def create_app(overrides: dict | None = None) -> Flask:
             tmp.unlink(missing_ok=True)
             flash(str(exc), "error")
             return redirect(url_for("tracker_view"))
-        tracker.backup(tp(), Path(app.config["BACKUPS_DIR"]), reason="before replace")
-        shutil.move(tmp, tp())
+        tracker.replace_tracker(tp(), tmp, Path(app.config["BACKUPS_DIR"]))
         flash("Tracker.xlsx replaced (the previous file was backed up).", "success")
         return redirect(url_for("tracker_view"))
 

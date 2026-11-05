@@ -54,11 +54,12 @@ def build_report(report_date: date, sales: list[Sale], riders: list[str]) -> Dai
     blocks = []
     for rider in order:
         block = RiderBlock(rider)
-        merged: dict[str, float] = {}
+        merged: dict[str, list] = {}  # UPPER name -> [display name, qty]
         for s in sales:
             if s.rider == rider and s.date == report_date:
-                merged[s.client] = merged.get(s.client, 0) + s.count
-        block.lines = list(merged.items())
+                entry = merged.setdefault(s.client.strip().upper(), [s.client, 0.0])
+                entry[1] += s.count
+        block.lines = [(name, qty) for name, qty in merged.values()]
         blocks.append(block)
     return DailyReport(report_date, blocks)
 

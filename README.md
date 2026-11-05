@@ -28,7 +28,8 @@ Open http://localhost:5000. Phones on the same Wi-Fi can use `http://<computer-i
 
 - Go to **Tracker → Use your existing Tracker.xlsx** and upload your current file. It needs a `Data Source` sheet and, ideally, a `Client List` sheet.
 - Without an `ANTHROPIC_API_KEY`, everything still works except automatic reading: you upload the photo and type the rows next to it.
-- Set `APP_PASSWORD` if the site can be reached by anyone outside the shop.
+- Set `APP_PASSWORD` if the site can be reached by anyone outside the shop, and set a fixed `SECRET_KEY`.
+- "Today" and the 5-day window use `APP_TIMEZONE` (default `Asia/Manila`), not the server clock.
 - Files are kept under `data/`: `Tracker.xlsx`, `reports/`, `raw/` (one photo per date), `backups/`. Back this folder up. It is not committed to git.
 
 To run it in production, use a real WSGI server, e.g. `pip install waitress && waitress-serve --port 5000 --call app:create_app`.

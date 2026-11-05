@@ -3,6 +3,7 @@
 {% block content %}
 <h1>Client List</h1>
 <form class="card inline-form" method="post" action="{{ url_for('clients_post') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input name="name" placeholder="Client name" required>
   <select name="status"><option>ACTIVE</option><option>INACTIVE</option></select>
   <button class="primary">Add / update</button>
@@ -14,6 +15,7 @@
   <ul class="chips">
   {% for n in unlisted %}
     <li><form method="post" action="{{ url_for('clients_post') }}" class="chip-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="name" value="{{ n }}"><input type="hidden" name="status" value="ACTIVE">
       {{ n }} <button class="link">add</button></form></li>
   {% endfor %}
@@ -31,6 +33,7 @@
       <td>{{ last.get(c.name.upper())|longdate }}</td>
       <td class="right">
         <form method="post" action="{{ url_for('clients_post') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="name" value="{{ c.name }}">
           <input type="hidden" name="status" value="{{ 'ACTIVE' if c.status == 'INACTIVE' else 'INACTIVE' }}">
           <button class="link">mark {{ 'active' if c.status == 'INACTIVE' else 'inactive' }}</button>

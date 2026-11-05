@@ -13,6 +13,7 @@
 
 <form class="card" method="post" action="{{ url_for('tracker_upload') }}" enctype="multipart/form-data"
       onsubmit="return confirm('Replace the tracker with this file? The current file is backed up first.')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <h3>Use your existing Tracker.xlsx</h3>
   <p class="muted small">Upload your current tracker to start from your history. It must have a “Data Source” sheet. The file in the app is backed up before it is replaced.</p>
   <input type="file" name="tracker" accept=".xlsx" required>

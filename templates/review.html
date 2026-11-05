@@ -22,6 +22,7 @@
   {% endif %}
 
   <form class="card" method="post" action="{{ url_for('save') }}" id="rows-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="report_date" value="{{ report_date.isoformat() }}">
     <input type="hidden" name="token" value="{{ token or '' }}">
     <datalist id="client-list">{% for c in clients %}<option value="{{ c.name }}">{% endfor %}</datalist>
@@ -37,7 +38,7 @@
           </select></td>
           <td><input name="client" value="{{ r.client }}" list="client-list" autocomplete="off">
             {% if r.flags %}<div class="flags">⚠ {{ r.flags|join('; ') }}</div>{% endif %}</td>
-          <td class="num"><input name="qty" value="{{ r.qty|qty }}" inputmode="decimal"></td>
+          <td class="num"><input name="qty" value="{{ r.qty|qty_input }}" inputmode="decimal"></td>
           <td><button type="button" class="icon remove" title="Remove row">✕</button></td>
         </tr>
       {% endfor %}
@@ -74,7 +75,12 @@
     if (focus) row.querySelector('[name=client]').focus();
     recalc();
   }
-  function num(v) { v = (v || '').trim(); return v === '1/2' ? 0.5 : parseFloat(v) || 0; }
+  function num(v) {
+    v = (v || '').trim().replace(/,/g, '');
+    const m = v.match(/^(?:(\d+)\s+)?(\d+)\s*\/\s*(\d+)$/);
+    if (m) return +m[3] ? (+(m[1] || 0)) + (+m[2]) / (+m[3]) : 0;
+    const n = Number(v); return isFinite(n) ? n : 0;
+  }
   function fmt(n) { return Number.isInteger(n) ? String(n) : n.toFixed(1); }
   function recalc() {
     let total = 0; const per = {};
@@ -87,6 +93,15 @@
     document.getElementById('subtotals').innerHTML = Object.entries(per).filter(([, q]) => q > 0)
       .map(([r, q]) => `<span class="chip">${r}: <b>${fmt(q)}</b></span>`).join('');
   }
+  document.getElementById('rows-form').addEventListener('submit', (e) => {
+    const btn = e.target.querySelector('button[type=submit]');
+    if (btn.disabled) { e.preventDefault(); return; }   // stop double-click saving twice
+    btn.disabled = true; btn.textContent = 'Saving…';
+  });
+  window.addEventListener('pageshow', () => {
+    const btn = document.querySelector('#rows-form button[type=submit]');
+    btn.disabled = false; btn.textContent = 'Save to Tracker.xlsx';
+  });
   document.getElementById('add-row').addEventListener('click', () => addRow(true));
   tbody.addEventListener('click', e => { if (e.target.classList.contains('remove')) { e.target.closest('tr').remove(); recalc(); } });
   tbody.addEventListener('input', recalc);
