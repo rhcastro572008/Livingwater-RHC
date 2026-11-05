@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+# business data (Tracker.xlsx, photos, reports, backups) stays on the server, not in git
+data/

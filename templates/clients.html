@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Clients{% endblock %}
+{% block content %}
+<h1>Client List</h1>
+<form class="card inline-form" method="post" action="{{ url_for('clients_post') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input name="name" placeholder="Client name" required>
+  <select name="status"><option>ACTIVE</option><option>INACTIVE</option></select>
+  <button class="primary">Add / update</button>
+</form>
+
+{% if unlisted %}
+<div class="card notes">
+  <h3>In the sales data but not on the Client List</h3>
+  <ul class="chips">
+  {% for n in unlisted %}
+    <li><form method="post" action="{{ url_for('clients_post') }}" class="chip-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="name" value="{{ n }}"><input type="hidden" name="status" value="ACTIVE">
+      {{ n }} <button class="link">add</button></form></li>
+  {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<table class="table card">
+  <thead><tr><th>Client</th><th>Status</th><th>Last order</th><th></th></tr></thead>
+  <tbody>
+  {% for c in clients %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td><span class="badge {{ (c.status or 'blank')|lower }}">{{ c.status or 'blank' }}</span></td>
+      <td>{{ last.get(c.name.upper())|longdate }}</td>
+      <td class="right">
+        <form method="post" action="{{ url_for('clients_post') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="name" value="{{ c.name }}">
+          <input type="hidden" name="status" value="{{ 'ACTIVE' if c.status == 'INACTIVE' else 'INACTIVE' }}">
+          <button class="link">mark {{ 'active' if c.status == 'INACTIVE' else 'inactive' }}</button>
+        </form>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">No clients yet. Add them above, or upload your existing Tracker.xlsx on the Tracker page.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

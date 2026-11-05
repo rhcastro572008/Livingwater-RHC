@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Upload{% endblock %}
+{% block content %}
+<h1>Upload today's board</h1>
+<p class="muted">Take a photo of the Ice Monitoring whiteboard. The rows are read from the photo, you check them, and then they are saved to <b>Tracker.xlsx</b> and the daily report is created.</p>
+
+<form class="card" method="post" action="{{ url_for('upload_post') }}" enctype="multipart/form-data" id="upload-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Report date <small>(the date on the board — not necessarily today)</small>
+    <input type="date" name="report_date" required max="{{ today.isoformat() }}">
+  </label>
+
+  <label>Photo of the board
+    <input type="file" name="photo" accept="image/*" id="photo">
+  </label>
+  <img id="preview" class="preview" alt="" hidden>
+
+  {% if not reader_ready %}
+  <p class="flash warning">Automatic photo reading is not set up (no <code>ANTHROPIC_API_KEY</code>). You can still upload the photo and type the rows next to it.</p>
+  {% endif %}
+
+  <div class="actions">
+    <button type="submit" class="primary" id="read-btn">Read photo</button>
+    <button type="submit" name="manual" value="1" class="secondary" formnovalidate
+            onclick="return document.querySelector('[name=report_date]').reportValidity()">Enter rows by hand</button>
+  </div>
+  <p class="muted small" id="working" hidden>Reading the board… this can take up to a minute.</p>
+</form>
+
+{% if loaded %}
+<section>
+  <h2>Already in the tracker</h2>
+  <ul class="chips">
+  {% for d in loaded %}<li><a href="{{ url_for('report_view', day=d.isoformat()) }}">{{ d|longdate }}</a></li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  const photo = document.getElementById('photo'), preview = document.getElementById('preview');
+  photo.addEventListener('change', () => {
+    const f = photo.files[0];
+    if (f) { preview.src = URL.createObjectURL(f); preview.hidden = false; }
+  });
+  const readBtn = document.getElementById('read-btn');
+  document.getElementById('upload-form').addEventListener('submit', (e) => {
+    if (e.submitter && e.submitter.id === 'read-btn') {
+      if (!photo.files.length) { e.preventDefault(); alert('Choose a photo of the board first.'); return; }
+      document.getElementById('working').hidden = false;
+      e.submitter.disabled = true; e.submitter.textContent = 'Reading…';
+    }
+  });
+  // Coming back with the browser's Back button: re-enable the button.
+  window.addEventListener('pageshow', () => {
+    readBtn.disabled = false; readBtn.textContent = 'Read photo';
+    document.getElementById('working').hidden = true;
+  });
+</script>
+{% endblock %}

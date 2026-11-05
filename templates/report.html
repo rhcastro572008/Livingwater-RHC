@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Report {{ report.title_date }}{% endblock %}
+{% block content %}
+<div class="row-between">
+  <div>
+    <h1>Ice Monitoring Report</h1>
+    <p class="muted">{{ report.title_date }}</p>
+  </div>
+  <div class="actions">
+    <a class="button primary" href="{{ url_for('report_download', day=report.report_date.isoformat()) }}">Download .xlsx</a>
+    <button class="secondary" onclick="window.print()">Print</button>
+  </div>
+</div>
+
+<div class="review-grid {{ 'no-photo' if not photo }}">
+  {% if photo %}
+  <figure class="card photo">
+    <a href="{{ url_for('report_photo', day=report.report_date.isoformat()) }}" target="_blank" rel="noopener">
+      <img src="{{ url_for('report_photo', day=report.report_date.isoformat()) }}" alt="Whiteboard photo"></a>
+  </figure>
+  {% endif %}
+  <table class="report card">
+    <thead><tr><th>Rider</th><th>Customer</th><th class="num">Qty</th></tr></thead>
+    <tbody>
+    {% for b in report.blocks %}
+      {% for client, q in (b.lines or [("No sales", 0)]) %}
+        <tr class="{{ 'muted' if not b.lines }}"><td>{{ b.rider }}</td><td>{{ client }}</td><td class="num">{{ '%.1f'|format(q) }}</td></tr>
+      {% endfor %}
+      <tr class="subtotal"><td>{{ b.rider }} Subtotal</td><td></td><td class="num">{{ '%.1f'|format(b.subtotal) }}</td></tr>
+    {% endfor %}
+      <tr class="grand"><td>TOTAL</td><td></td><td class="num">{{ '%.1f'|format(report.total) }}</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<form method="post" action="{{ url_for('report_delete', day=report.report_date.isoformat()) }}" class="danger-zone noprint"
+      onsubmit="return confirm('Remove all rows for {{ report.title_date }} from Tracker.xlsx? A backup is kept.')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <p class="muted small">Made a mistake? Remove this day from Tracker.xlsx, then upload the photo again.</p>
+  <button class="danger small">Remove this day from the tracker</button>
+</form>
+{% endblock %}

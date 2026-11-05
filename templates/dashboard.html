@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="row-between">
+  <h1>Dashboard · {{ month_label }}</h1>
+  <form method="get" class="filters">
+    <label>Month
+      <select name="month" onchange="this.form.submit()">
+        {% for value, label in months %}<option value="{{ value }}" {{ 'selected' if value == '%d-%02d'|format(year, month) }}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <input type="hidden" name="as_of" value="{{ as_of.isoformat() }}">
+  </form>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><span>Total ice sold</span><b>{{ month_total|qty }}</b></div>
+  <div class="kpi"><span>Days with sales</span><b>{{ selling_days }}</b></div>
+  <div class="kpi"><span>Average per selling day</span><b>{{ avg_day|qty }}</b></div>
+  <div class="kpi"><span>Best day</span><b>{% if best %}{{ best[1]|qty }} <small>on {{ best[0].strftime('%b') }} {{ best[0].day }}</small>{% else %}—{% endif %}</b></div>
+</div>
+
+<section class="card">
+  <h2>Rider performance</h2>
+  <p class="muted small">Total quantity delivered by each rider in {{ month_label }}.</p>
+  <div class="chart" style="height: {{ 60 + 34 * perf|length }}px"><canvas id="riderChart" aria-label="Rider totals bar chart" role="img"></canvas></div>
+  <table class="table">
+    <thead><tr><th>Rider</th><th class="num">Total</th><th class="num">Share</th><th class="num">Days</th><th class="num">Avg / day</th><th class="num">Deliveries</th><th class="num">Clients</th><th>Best day</th></tr></thead>
+    <tbody>
+    {% for p in perf %}
+      <tr class="{{ 'muted' if not p.total }}">
+        <td>{{ p.rider }}</td>
+        <td class="num"><b>{{ p.total|qty }}</b></td>
+        <td class="num">{{ '%.0f'|format(p.share * 100) }}%</td>
+        <td class="num">{{ p.days_with_sales }}</td>
+        <td class="num">{{ p.avg_per_day|qty }}</td>
+        <td class="num">{{ p.deliveries }}</td>
+        <td class="num">{{ p.clients }}</td>
+        <td>{% if p.best_day %}{{ p.best_day.strftime('%b') }} {{ p.best_day.day }} ({{ p.best_day_qty|qty }}){% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Daily sales</h2>
+  <p class="muted small">Total quantity per day in {{ month_label }}, all riders combined.</p>
+  <div class="chart" style="height: 280px"><canvas id="dailyChart" aria-label="Daily sales column chart" role="img"></canvas></div>
+  <details>
+    <summary>Show daily table (by rider)</summary>
+    <div class="scroll-x">
+    <table class="table compact">
+      <thead><tr><th>Date</th>{% for r in matrix %}<th class="num">{{ r }}</th>{% endfor %}<th class="num">Total</th></tr></thead>
+      <tbody>
+      {% for d, q in daily %}{% set i = loop.index0 %}
+        <tr class="{{ 'muted' if not q }}">
+          <td>{{ d.strftime('%a %b') }} {{ d.day }}</td>
+          {% for r, vals in matrix.items() %}<td class="num">{{ vals[i]|qty if vals[i] else '' }}</td>{% endfor %}
+          <td class="num"><b>{{ q|qty }}</b></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </details>
+</section>
+
+<section class="card">
+  <div class="row-between">
+    <div>
+      <h2>Clients who did not order in the past {{ days_n }} days</h2>
+      <p class="muted small">No order from {{ window_start|longdate }} to {{ as_of|longdate }}. Active clients from the Client List plus anyone in the sales data; INACTIVE clients are left out.</p>
+    </div>
+    <form method="get" class="filters">
+      <input type="hidden" name="month" value="{{ '%d-%02d'|format(year, month) }}">
+      <label>As of <input type="date" name="as_of" value="{{ as_of.isoformat() }}" onchange="this.form.submit()"></label>
+    </form>
+  </div>
+  {% if gaps %}
+  <table class="table">
+    <thead><tr><th>Client</th><th>Last order</th><th class="num">Days since</th><th>Last rider</th><th class="num">Qty this month</th></tr></thead>
+    <tbody>
+    {% for g in gaps %}
+      <tr>
+        <td>{{ g.client }}{% if g.status == 'not on list' %} <span class="badge blank">not on list</span>{% endif %}</td>
+        <td>{{ g.last_order|longdate if g.last_order else 'Never' }}</td>
+        <td class="num">{{ g.days_since if g.days_since is not none else '—' }}</td>
+        <td>{{ g.last_rider or '—' }}</td>
+        <td class="num">{{ g.total_month|qty }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">{{ gaps|length }} client{{ 's' if gaps|length != 1 }} to follow up.</p>
+  {% else %}
+  <p>✅ Every active client ordered in the past {{ days_n }} days.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='vendor/chart.umd.js') }}"></script>
+<script>
+  const data = {{ chart|tojson }};
+  const css = getComputedStyle(document.documentElement);
+  const tok = n => css.getPropertyValue(n).trim();
+  const fmt = v => Number.isInteger(v) ? v.toLocaleString() : v.toFixed(1);
+  Chart.defaults.color = tok('--muted');
+  Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  Chart.defaults.borderColor = tok('--grid');
+  const tooltip = { backgroundColor: tok('--surface'), titleColor: tok('--ink'), bodyColor: tok('--ink-2'),
+                    borderColor: tok('--line'), borderWidth: 1, padding: 10, displayColors: false };
+
+  new Chart(document.getElementById('riderChart'), {
+    type: 'bar',
+    data: { labels: data.riders, datasets: [{ label: 'Total', data: data.riderTotals,
+      backgroundColor: tok('--series-1'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 22 }] },
+    options: { indexAxis: 'y', maintainAspectRatio: false,
+      plugins: { legend: { display: false },
+        tooltip: { ...tooltip, callbacks: { label: c => `${fmt(c.parsed.x)} total` } } },
+      scales: { x: { beginAtZero: true, grid: { color: tok('--grid') } },
+                y: { grid: { display: false }, ticks: { color: tok('--ink-2') } } } }
+  });
+
+  const riderNames = Object.keys(data.matrix);
+  new Chart(document.getElementById('dailyChart'), {
+    type: 'bar',
+    data: { labels: data.labels, datasets: [{ label: 'Total', data: data.totals,
+      backgroundColor: tok('--series-1'), borderRadius: 4, borderSkipped: 'start', maxBarThickness: 18 }] },
+    options: { maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: false },
+        tooltip: { ...tooltip, callbacks: {
+          title: c => `Day ${c[0].label}`,
+          label: c => `Total: ${fmt(c.parsed.y)}`,
+          afterLabel: c => riderNames.filter(r => data.matrix[r][c.dataIndex] > 0)
+                                     .map(r => `${r}: ${fmt(data.matrix[r][c.dataIndex])}`).join('\n') } } },
+      scales: { y: { beginAtZero: true, grid: { color: tok('--grid') } },
+                x: { grid: { display: false } } } }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<h1>Daily Ice Monitoring Reports</h1>
+{% if not days %}
+  <p class="muted">No reports yet. <a href="{{ url_for('upload') }}">Upload the first board photo.</a></p>
+{% else %}
+<table class="table card">
+  <thead><tr><th>Date</th><th class="num">Rows</th><th class="num">Total qty</th><th>Photo</th><th></th></tr></thead>
+  <tbody>
+  {% for d in days %}
+    <tr>
+      <td><a href="{{ url_for('report_view', day=d.date.isoformat()) }}">{{ d.date|longdate }}</a></td>
+      <td class="num">{{ d.rows }}</td>
+      <td class="num">{{ d.total|qty }}</td>
+      <td>{% if d.photo %}<a href="{{ url_for('report_photo', day=d.date.isoformat()) }}" target="_blank" rel="noopener">view</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="right"><a class="button small" href="{{ url_for('report_download', day=d.date.isoformat()) }}">Download .xlsx</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

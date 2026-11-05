@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Tracker.xlsx{% endblock %}
+{% block content %}
+<h1>Tracker.xlsx</h1>
+<div class="kpis">
+  <div class="kpi"><span>Rows</span><b>{{ rows }}</b></div>
+  <div class="kpi"><span>Days loaded</span><b>{{ days }}</b></div>
+  <div class="kpi"><span>Clients</span><b>{{ clients }}</b></div>
+  <div class="kpi"><span>Date range</span><b class="small">{{ first|longdate }} – {{ last|longdate }}</b></div>
+</div>
+<p class="muted small">Last saved {{ modified.strftime('%B %d, %Y %I:%M %p') }}. Sheets: <b>Data Source</b> (Rider | Date | Client | Count) and <b>Client List</b> (Client | STATUS).</p>
+<p><a class="button primary" href="{{ url_for('tracker_download') }}">Download Tracker.xlsx</a></p>
+
+<form class="card" method="post" action="{{ url_for('tracker_upload') }}" enctype="multipart/form-data"
+      onsubmit="return confirm('Replace the tracker with this file? The current file is backed up first.')">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <h3>Use your existing Tracker.xlsx</h3>
+  <p class="muted small">Upload your current tracker to start from your history. It must have a “Data Source” sheet. The file in the app is backed up before it is replaced.</p>
+  <input type="file" name="tracker" accept=".xlsx" required>
+  <div class="actions"><button class="secondary">Upload and replace</button></div>
+</form>
+{% endblock %}
